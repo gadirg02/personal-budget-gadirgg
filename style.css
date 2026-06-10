@@ -248,3 +248,7 @@ body.auth-locked .authGate{display:grid;min-height:100vh;place-items:center;padd
 .authCard .advancedBox{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}.authCard code{background:rgba(0,0,0,.06);padding:2px 5px;border-radius:6px}
 [data-theme="dark"] .authCard code{background:rgba(255,255,255,.08)}
 @media(max-width:560px){body.auth-locked .authGate{padding:14px}.authCard{padding:20px;border-radius:20px}.authCard h1{font-size:22px}}
+
+/* Future income visual status */
+.incomeUpcoming b{color:var(--ok)}
+[data-theme="dark"] .incomeUpcoming b{color:#68d391}
