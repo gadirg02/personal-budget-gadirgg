@@ -252,3 +252,8 @@ body.auth-locked .authGate{display:grid;min-height:100vh;place-items:center;padd
 /* Future income visual status */
 .incomeUpcoming b{color:var(--ok)}
 [data-theme="dark"] .incomeUpcoming b{color:#68d391}
+
+/* Release 3.3: ordering controls, data model, searchable fields */
+.orderCol{width:88px;text-align:center}.orderBtns{display:flex;gap:4px;justify-content:center}.orderBtns button,.miniBtn{padding:5px 8px;border-radius:8px;line-height:1;min-width:30px}.commentArea{min-height:42px;resize:vertical}.tagListOrdered{display:grid;gap:8px;margin-top:12px}.orderedTag{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;border:1px solid var(--line);background:rgba(255,255,255,.45);border-radius:12px;padding:8px 10px}.tagActions{display:flex;gap:5px;align-items:center;flex-shrink:0}.modelDataGrid{align-items:start}.settingsTabs button{white-space:nowrap}input[list]{background:#fff}
+[data-theme="dark"] .orderedTag{background:#211b15;border-color:#4a3a2d}[data-theme="dark"] input[list]{background:#1f1a15;color:var(--ink)}
+@media(max-width:900px){.orderCol{width:auto}.orderBtns{justify-content:flex-start}.modelDataGrid{display:block}.modelDataGrid .card{margin-bottom:12px}.expenseTable .orderCol,.incomeTable .orderCol{display:block}.expenseTable td.orderCol::before,.incomeTable td.orderCol::before{content:'Порядок';font-size:12px;color:var(--muted);display:block;margin-bottom:5px}.orderedTag{padding:10px}.tagActions .miniBtn{min-width:34px}}
