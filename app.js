@@ -343,13 +343,399 @@ async function initCloud(){
   cloudClient.auth.onAuthStateChange(async (event, session)=>{
     cloudUser = session?.user || null;
     if(cloudUser){
+      cloudStatus = 'Облако подключconst seed = JSON.parse(document.getElementById('seedData').textContent);
+const STORAGE_KEY = 'personalBudgetSiteOldDesignGoals.v2';
+const CLOUD_CONFIG_KEY = 'personalBudgetCloudSupabase.v1';
+const THEME_KEY = 'personalBudgetTheme.v1';
+const EMBEDDED_CLOUD_CONFIG = window.BUDGET_SUPABASE_CONFIG || {};
+let state = migrateState(JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null') || seed);
+let currentMonth = state.months[new Date().getMonth()] || 'Январь';
+let settingsTab = 'account';
+let searchQuery = '';
+let searchScope = 'all';
+let currentTheme = localStorage.getItem(THEME_KEY) || 'light';
+let selected = { expenses: new Set(), incomes: new Set(), purchases: new Set() };
+let storedCloudConfig = JSON.parse(localStorage.getItem(CLOUD_CONFIG_KEY) || 'null') || {};
+let cloudConfig = {
+  url: storedCloudConfig.url || EMBEDDED_CLOUD_CONFIG.url || '',
+  key: storedCloudConfig.key || EMBEDDED_CLOUD_CONFIG.key || '',
+  enabled: storedCloudConfig.enabled ?? !!(EMBEDDED_CLOUD_CONFIG.url && EMBEDDED_CLOUD_CONFIG.key)
+};
+let cloudClient = null;
+let cloudUser = null;
+let cloudStatus = cloudConfig.enabled ? 'Облако не подключено' : 'Оффлайн режим';
+let cloudSaveTimer = null;
+let cloudSaveInProgress = false;
+let pendingCloudSave = false;
+let suppressCloudSave = false;
+let cloudChecking = false;
+
+
+function applyTheme(theme){
+  currentTheme = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', currentTheme);
+  localStorage.setItem(THEME_KEY, currentTheme);
+}
+function setTheme(theme){
+  applyTheme(theme);
+  renderSettings();
+}
+applyTheme(currentTheme);
+
+const rub = n => (Number(n)||0).toLocaleString('ru-RU') + ' ₽';
+const pct = n => (Number(n)||0).toLocaleString('ru-RU', {maximumFractionDigits: 1}) + '%';
+function num(v){ return Number(String(v ?? '').replace(/\s/g,'').replace(',','.')) || 0; }
+
+function cleanAmountValue(value, finalize=false){
+  let raw = String(value ?? '').replace(/\s/g,'').replace(/,/g,'.');
+  raw = raw.replace(/[^0-9.]/g,'');
+  const parts = raw.split('.');
+  let out = parts.shift() || '';
+  if(parts.length){ out += '.' + parts.join('').slice(0,2); }
+  if(finalize){
+    if(out === '.') out = '';
+    out = out.replace(/^0+(?=\d)/,'');
+    out = out.replace(/\.$/,'');
+  }
+  return out;
+}
+function amountInput(el, list, id, key){
+  const before = el.value;
+  const cleaned = cleanAmountValue(before, false);
+  if(before !== cleaned){
+    const pos = el.selectionStart || cleaned.length;
+    el.value = cleaned;
+    const nextPos = Math.max(0, pos - (before.length - cleaned.length));
+    try{ el.setSelectionRange(nextPos, nextPos); }catch(e){}
+  }
+  if(list && id && key) upd(list, id, key, el.value, {silent:true});
+}
+function amountBlur(el, list, id, key){
+  el.value = cleanAmountValue(el.value, true);
+  if(list && id && key) upd(list, id, key, el.value, {silent:true});
+}
+function amountAttrs(){return 'inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" autocomplete="off"';}
+function uid(p){ return p + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+function save(){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  scheduleCloudSave();
+}
+
+function migrateState(data){
+  const s = JSON.parse(JSON.stringify(data || seed));
+  s.months ||= seed.months;
+  s.expenses ||= [];
+  s.incomes ||= [];
+  s.purchases ||= [];
+  s.expenseCategories ||= s.categories || seed.expenseCategories || seed.categories || [];
+  s.categories = s.expenseCategories; // совместимость со старыми экспортами
+  s.statuses ||= seed.statuses || ['План','Оплачено','Отложено','Отменено'];
+  s.priorities ||= seed.priorities || ['Низкий','Средний','Высокий','Обязательно'];
+  s.incomeTypes ||= seed.incomeTypes || ['Зарплата','Доп. доход','Возврат','Подарок','Другое'];
+  s.archivedMonths ||= [];
+  s.recurringExpenses ||= [];
+  s.recurringExpenses = s.recurringExpenses.map(x => normalizeRecurringExpense(x));
+  s.expenses = s.expenses.map(x => normalizeExpense(x));
+  s.purchases = s.purchases.map(x => ({
+    id: x.id || uid('p'),
+    name: x.name || x.purchase || 'Цель',
+    targetAmount: x.targetAmount ?? x.planAmount ?? '',
+    percent: x.percent ?? '',
+    initialAmount: x.initialAmount ?? x.factAmount ?? '',
+    priority: x.priority || 'Средний',
+    status: x.status || 'План',
+    comment: x.comment || '',
+    targetDate: x.targetDate || '',
+    reserve: !!x.reserve
+  }));
+  return s;
+}
+
+function normalizeExpense(x){
+  const plan = num(x.planAmount);
+  const fact = num(x.factAmount);
+  const autoPaid = plan > 0 && fact > 0 && plan === fact;
+  const paidManual = Boolean((x.paidManual !== undefined ? x.paidManual : (x.status === 'Оплачено' && !autoPaid)));
+  const paid = Boolean(x.paid || x.status === 'Оплачено' || autoPaid);
+  return {
+    id: x.id || uid('e'),
+    month: x.month || seed.months?.[0] || 'Январь',
+    category: x.category || 'Другое',
+    planAmount: x.planAmount ?? '',
+    factAmount: x.factAmount ?? '',
+    date: x.date || '',
+    status: paid ? 'Оплачено' : (x.status || 'План'),
+    paid,
+    paidManual,
+    comment: x.comment || '',
+    priority: x.priority || 'Средний',
+    recurringKey: x.recurringKey || ''
+  };
+}
+
+function normalizeRecurringExpense(x){
+  return {
+    id: x.id || uid('r'),
+    category: x.category || 'Другое',
+    planAmount: x.planAmount ?? '',
+    day: String(x.day || '').replace(/[^0-9]/g,'').slice(0,2),
+    priority: x.priority || 'Средний',
+    comment: x.comment || '',
+    active: x.active !== false
+  };
+}
+function monthNumber(month){ const idx = monthIndex(month); return idx >= 0 ? idx + 1 : (new Date().getMonth()+1); }
+function daysInMonth(month){ return new Date(new Date().getFullYear(), monthNumber(month), 0).getDate(); }
+function dateForMonthDay(month, day){
+  const d = Math.min(Math.max(Number(day)||1,1), daysInMonth(month));
+  const mm = String(monthNumber(month)).padStart(2,'0');
+  const dd = String(d).padStart(2,'0');
+  return `${new Date().getFullYear()}-${mm}-${dd}`;
+}
+function recurringKey(r, month){ return `${r.id}:${month}`; }
+function applyRecurringForMonth(month=currentMonth, silent=false){
+  if(isMonthArchived(month)){ if(!silent) alert('Месяц архивирован. Сначала разархивируй его.'); return; }
+  let added = 0;
+  state.recurringExpenses ||= [];
+  state.recurringExpenses.filter(r=>r.active !== false).forEach(r=>{
+    const key = recurringKey(r, month);
+    const exists = state.expenses.some(e=>e.recurringKey === key);
+    if(!exists){
+      state.expenses.push(normalizeExpense({id:uid('e'), month, category:r.category, planAmount:r.planAmount, factAmount:'', date: r.day ? dateForMonthDay(month, r.day) : '', status:'План', paid:false, paidManual:false, comment:r.comment || 'Повторяющийся платеж', priority:r.priority, recurringKey:key}));
+      added++;
+    }
+  });
+  if(added){ save(); render(); }
+  if(!silent) alert(added ? `Добавлено платежей: ${added}` : 'Новых повторяющихся платежей нет');
+}
+function applyRecurringAllMonths(){
+  if(!confirm('Создать недостающие повторяющиеся платежи во всех неархивных месяцах?')) return;
+  let added = 0;
+  state.months.forEach(m=>{
+    if(isMonthArchived(m)) return;
+    state.recurringExpenses.filter(r=>r.active !== false).forEach(r=>{
+      const key = recurringKey(r,m);
+      if(!state.expenses.some(e=>e.recurringKey === key)){
+        state.expenses.push(normalizeExpense({id:uid('e'), month:m, category:r.category, planAmount:r.planAmount, factAmount:'', date: r.day ? dateForMonthDay(m, r.day) : '', status:'План', paid:false, paidManual:false, comment:r.comment || 'Повторяющийся платеж', priority:r.priority, recurringKey:key}));
+        added++;
+      }
+    });
+  });
+  if(added){ save(); render(); }
+  alert(added ? `Добавлено платежей: ${added}` : 'Новых повторяющихся платежей нет');
+}
+function syncExpensePaid(item){
+  if(!item) return;
+  const plan = num(item.planAmount);
+  const fact = num(item.factAmount);
+  if(plan > 0 && fact >= plan){
+    item.paid = true;
+    item.status = 'Оплачено';
+    return;
+  }
+  if(!item.paidManual){
+    item.paid = false;
+    if(item.status === 'Оплачено') item.status = 'План';
+  }
+}
+function setExpensePaid(item, paid){
+  if(!item) return;
+  item.paidManual = !!paid;
+  item.paid = !!paid;
+  item.status = item.paid ? 'Оплачено' : 'План';
+}
+function selectedCount(list){
+  return selected[list]?.size || 0;
+}
+function bulkDeleteButton(list, disabled=false){
+  const count = selectedCount(list);
+  if(!count) return '';
+  return `<button class="danger" onclick="bulkDelete('${list}')" ${disabled?'disabled':''}>Удалить выбранные (${count})</button>`;
+}
+function expenseStatusPill(x){
+  const paid = Boolean(x.paid || x.status === 'Оплачено');
+  return `<span class="pill ${paid?'ok':''}">${paid?'Оплачено':'Не оплачено'}</span>`;
+}
+
+function options(arr, selected=''){return arr.map(x=>`<option ${x===selected?'selected':''}>${escapeHtml(x)}</option>`).join('')}
+function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
+function val(id){return document.getElementById(id)?.value || ''}
+function isMonthArchived(month){return state.archivedMonths?.includes(month)}
+function archivedAttr(month){return isMonthArchived(month) ? 'disabled' : ''}
+function archivedNote(month){return isMonthArchived(month) ? '<span class="pill archived">Архив</span>' : ''}
+function progressBar(value){const v=Math.max(0,Math.min(Number(value)||0,100)); return `<div class="progress"><div style="width:${v}%"></div></div>`}
+
+function todayLocal(){const d=new Date(); d.setHours(0,0,0,0); return d;}
+function dateDiffDays(dateValue){if(!dateValue) return null; const d=new Date(dateValue+'T00:00:00'); if(Number.isNaN(d.getTime())) return null; return Math.round((d-todayLocal())/86400000);}
+function notificationItems(month='ALL'){
+  const items=[];
+  state.expenses.forEach(x=>{
+    if(!x.date || (month!=='ALL' && x.month!==month)) return;
+    const diff=dateDiffDays(x.date);
+    if(diff!==null && diff>=0 && diff<=2 && !x.paid && x.status!=='Оплачено') items.push({kind:'Расход', month:x.month, title:x.category, date:x.date, diff, text:x.comment});
+  });
+  state.incomes.forEach(x=>{
+    if(!x.date || (month!=='ALL' && x.month!==month)) return;
+    const diff=dateDiffDays(x.date);
+    if(diff!==null && diff>=0 && diff<=2) items.push({kind:'Доход', month:x.month, title:x.type || x.source || 'Доход', date:x.date, diff, text:x.comment});
+  });
+  return items.sort((a,b)=>a.diff-b.diff || a.date.localeCompare(b.date));
+}
+function notificationText(diff){return diff===0?'сегодня':diff===1?'завтра':'через 2 дня'}
+function notificationPanel(month=currentMonth){
+  const items=notificationItems(month);
+  if(!items.length) return `<div class="card notifyCard"><h3>Уведомления</h3><p class="mutedText">Ближайших дат на 2 дня нет.</p></div>`;
+  return `<div class="card notifyCard"><h3>Уведомления</h3><p class="mutedText">Показываются записи с датой сегодня, завтра или через 2 дня. Если дата пустая — уведомления нет.</p><div class="notifyList">${items.map(x=>`<div class="notifyItem"><strong>${escapeHtml(x.kind)}: ${escapeHtml(x.title)}</strong><span>${escapeHtml(x.month)} · ${escapeHtml(x.date)} · ${notificationText(x.diff)}</span>${x.text?`<small>${escapeHtml(x.text)}</small>`:''}</div>`).join('')}</div></div>`;
+}
+
+
+function upcomingPayments(days=14){
+  const items=[];
+  state.expenses.forEach(x=>{
+    if(!x.date || x.paid || x.status==='Оплачено') return;
+    const diff=dateDiffDays(x.date);
+    if(diff!==null && diff>=0 && diff<=days){
+      items.push({month:x.month, category:x.category, date:x.date, diff, amount:num(x.planAmount)-num(x.factAmount), plan:x.planAmount, fact:x.factAmount, comment:x.comment});
+    }
+  });
+  return items.sort((a,b)=>a.diff-b.diff || a.date.localeCompare(b.date));
+}
+function upcomingPanel(days=14){
+  const items=upcomingPayments(days);
+  if(!items.length) return `<div class="card"><h3>Ближайшие платежи</h3><p class="mutedText">Неоплаченных платежей с датой на ближайшие ${days} дней нет.</p></div>`;
+  return `<div class="card"><div class="toolbar"><h3>Ближайшие платежи</h3><button onclick="showView('search');searchQuery='';searchScope='expenses';renderSearch()">Открыть поиск</button></div><div class="upcomingList">${items.slice(0,8).map(x=>`<div class="upcomingItem"><div><strong>${escapeHtml(x.category)}</strong><span>${escapeHtml(x.month)} · ${escapeHtml(x.date)} · ${notificationText(Math.min(x.diff,2)).replace('через 2 дня', 'через '+x.diff+' дн.')}</span>${x.comment?`<small>${escapeHtml(x.comment)}</small>`:''}</div><b>${rub(Math.max(x.amount,0))}</b></div>`).join('')}</div></div>`;
+}
+function monthIndex(month){return state.months.indexOf(month)}
+function totals(month){
+  const incomes = state.incomes.filter(x=>x.month===month).reduce((s,x)=>s+num(x.amount),0);
+  const expensesPlan = state.expenses.filter(x=>x.month===month).reduce((s,x)=>s+num(x.planAmount),0);
+  const expensesFact = state.expenses.filter(x=>x.month===month).reduce((s,x)=>s+num(x.factAmount),0);
+  const freePlan = incomes - expensesPlan;
+  const freeFact = incomes - expensesFact;
+  const positiveFreeFact = Math.max(freeFact, 0);
+  const goalPercentTotal = state.purchases.reduce((s,x)=>s+num(x.percent),0);
+  const goalAllocated = state.purchases.reduce((s,x)=>s+goalMonthAmount(x, month),0);
+  const undistributed = Math.max(positiveFreeFact - goalAllocated, 0);
+  return {incomes, expensesPlan, expensesFact, freePlan, freeFact, positiveFreeFact, goalPercentTotal, goalAllocated, undistributed};
+}
+function allTotals(){
+  return state.months.reduce((a,m)=>{const t=totals(m); Object.keys(t).forEach(k=>a[k]=(a[k]||0)+t[k]); return a}, {});
+}
+function goalMonthAmount(goal, month){
+  return Math.max(totalsNoGoals(month).freeFact, 0) * num(goal.percent) / 100;
+}
+function totalsNoGoals(month){
+  const incomes = state.incomes.filter(x=>x.month===month).reduce((s,x)=>s+num(x.amount),0);
+  const expensesFact = state.expenses.filter(x=>x.month===month).reduce((s,x)=>s+num(x.factAmount),0);
+  return {incomes, expensesFact, freeFact: incomes-expensesFact};
+}
+
+function allTotalsNoGoals(){
+  return state.months.reduce((a,m)=>{
+    const t = totalsNoGoals(m);
+    Object.keys(t).forEach(k=>a[k]=(a[k]||0)+t[k]);
+    return a;
+  }, {});
+}
+
+function goalAccumulated(goal, upToMonth=currentMonth){
+  const idx = monthIndex(upToMonth);
+  const months = idx < 0 ? state.months : state.months.slice(0, idx + 1);
+  return num(goal.initialAmount) + months.reduce((s,m)=>s+goalMonthAmount(goal,m),0);
+}
+function goalRemaining(goal, upToMonth=currentMonth){return Math.max(num(goal.targetAmount) - goalAccumulated(goal, upToMonth), 0)}
+function goalProgress(goal, upToMonth=currentMonth){const target=num(goal.targetAmount); return target ? Math.min(goalAccumulated(goal, upToMonth)/target*100, 100) : 0}
+function monthsUntil(dateValue){
+  if(!dateValue) return 0;
+  const now = new Date();
+  const d = new Date(dateValue+'T00:00:00');
+  if(Number.isNaN(d.getTime())) return 0;
+  return Math.max(1, (d.getFullYear()-now.getFullYear())*12 + (d.getMonth()-now.getMonth()) + (d.getDate()>=now.getDate()?1:0));
+}
+function goalMonthlyNeed(goal){
+  const months = monthsUntil(goal.targetDate);
+  if(!months) return 0;
+  return goalRemaining(goal, currentMonth) / months;
+}
+
+
+function hasSupabaseLibrary(){return !!(window.supabase && window.supabase.createClient)}
+function cleanSupabaseUrl(url){
+  let out = String(url || '').trim();
+  out = out.replace(/\/+$/, '');
+  out = out.replace(/\/rest\/v1$/i, '');
+  out = out.replace(/\/auth\/v1$/i, '');
+  return out;
+}
+function isCloudConfigured(){
+  return !!(cloudConfig.enabled && cloudConfig.url && cloudConfig.key);
+}
+function normalizeCloudConfig(){
+  cloudConfig.url = cleanSupabaseUrl(cloudConfig.url || EMBEDDED_CLOUD_CONFIG.url || '');
+  cloudConfig.key = (cloudConfig.key || EMBEDDED_CLOUD_CONFIG.key || '').trim();
+  cloudConfig.enabled = !!(cloudConfig.enabled && cloudConfig.url && cloudConfig.key);
+  localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify(cloudConfig));
+}
+function createCloudClient(){
+  normalizeCloudConfig();
+  if(!cloudConfig.enabled) { cloudClient=null; cloudUser=null; cloudStatus='Оффлайн режим'; return false; }
+  if(!hasSupabaseLibrary()){ cloudStatus='Supabase SDK не загрузился'; return false; }
+  try{
+    cloudClient = window.supabase.createClient(cloudConfig.url, cloudConfig.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
+    return true;
+  }catch(err){ cloudStatus='Ошибка клиента Supabase'; console.error(err); return false; }
+}
+async function initCloud(){
+  cloudChecking = true;
+  updateAuthGate();
+  if(!createCloudClient()){ cloudChecking=false; updateAuthGate(); return; }
+  const { data, error } = await cloudClient.auth.getSession();
+  cloudChecking = false;
+  if(error){ cloudStatus='Ошибка сессии Supabase'; updateAuthGate(); return; }
+  cloudUser = data?.session?.user || null;
+  if(cloudUser){
+    cloudStatus='Облако подключено. Загружаю данные...';
+    updateAuthGate();
+    await cloudLoad(false);
+  } else {
+    cloudStatus='Нужен вход в аккаунт';
+    updateAuthGate();
+  }
+  cloudClient.auth.onAuthStateChange(async (event, session)=>{
+    cloudUser = session?.user || null;
+    if(cloudUser){
       cloudStatus = 'Облако подключено';
+      updateAuthGate();
       if(event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') await cloudLoad(false);
     } else {
-      cloudStatus = 'Supabase настроен, нужен вход';
+      cloudStatus = 'Нужен вход в аккаунт';
+      updateAuthGate();
     }
     render();
   });
+}
+function authGateHtml(){
+  const configured = isCloudConfigured();
+  if(cloudChecking){
+    return `<div class="authCard"><div class="authLogo">₽</div><h1>Личный бюджет</h1><p>Проверяю вход...</p></div>`;
+  }
+  if(configured){
+    return `<div class="authCard cleanLogin"><div class="authLogo">₽</div><h1>Личный бюджет</h1><p>Войдите в личный бюджет</p><div class="authForm"><input id="authEmail" type="email" autocomplete="email" placeholder="Email"><input id="authPassword" type="password" autocomplete="current-password" placeholder="Пароль" onkeydown="if(event.key==='Enter') cloudLoginFromGate()"><button class="primary" onclick="cloudLoginFromGate()">Войти</button></div><p class="mutedText">После входа приложение запомнит сессию и при следующем открытии загрузит данные автоматически.</p></div>`;
+  }
+  return `<div class="authCard cleanLogin"><div class="authLogo">₽</div><h1>Личный бюджет</h1><p>Облачное подключение не настроено.</p><p class="mutedText">Заполни <code>cloud-config.js</code>: Supabase Project URL и publishable key. После этого на сайте останется только обычный вход по email и паролю.</p></div>`;
+}
+function updateAuthGate(){
+  const gate = document.getElementById('authGate');
+  if(!gate) return;
+  const lock = !cloudUser;
+  document.body.classList.toggle('auth-locked', lock);
+  if(lock){ gate.innerHTML = authGateHtml(); } else { gate.innerHTML = ''; }
+  updateCloudStatusView();
+}
+async function cloudLoginFromGate(){
+  const email = document.getElementById('authEmail')?.value || '';
+  const password = document.getElementById('authPassword')?.value || '';
+  await cloudLogin(email, password);
 }
 function scheduleCloudSave(){
   if(suppressCloudSave || !cloudConfig.enabled || !cloudClient || !cloudUser) return;
@@ -412,61 +798,51 @@ async function cloudLoad(showAlert=true){
 async function saveCloudSettings(){
   cloudConfig.url = val('supabaseUrl');
   cloudConfig.key = val('supabaseKey');
-  cloudConfig.enabled = !!document.getElementById('supabaseEnabled')?.checked;
+  cloudConfig.enabled = !!(cloudConfig.url && cloudConfig.key);
   normalizeCloudConfig();
   const ok=createCloudClient();
   if(ok) await initCloud();
+  updateAuthGate();
   render();
-  alert(cloudConfig.enabled ? 'Настройки Supabase сохранены' : 'Облачный режим выключен');
+  alert(cloudConfig.enabled ? 'Настройки Supabase сохранены' : 'Supabase не настроен');
 }
-async function cloudSignUp(){
-  if(!createCloudClient()){ alert('Сначала укажи Supabase URL и publishable/anon key'); return; }
-  const email=val('cloudEmail').trim(); const password=val('cloudPassword');
-  if(!email || !password){ alert('Укажи email и пароль'); return; }
-  const { error } = await cloudClient.auth.signUp({ email, password });
-  if(error){ alert('Ошибка регистрации: '+error.message); return; }
-  alert('Регистрация создана. Если Supabase попросит подтверждение email — подтверди письмо, потом нажми «Войти».');
-}
-async function cloudLogin(){
-  if(!createCloudClient()){ alert('Сначала укажи Supabase URL и publishable/anon key'); return; }
-  const email=val('cloudEmail').trim(); const password=val('cloudPassword');
+async function cloudLogin(emailArg='', passwordArg=''){
+  if(!createCloudClient()){ alert('Приложение не настроено: проверь cloud-config.js'); return; }
+  const email=(emailArg || val('cloudEmail')).trim(); const password=passwordArg || val('cloudPassword');
   if(!email || !password){ alert('Укажи email и пароль'); return; }
   const { data, error } = await cloudClient.auth.signInWithPassword({ email, password });
   if(error){ alert('Ошибка входа: '+error.message); return; }
   cloudUser=data?.user || null;
   cloudStatus='Облако подключено';
+  updateAuthGate();
   await cloudLoad(false);
   render();
 }
 async function cloudLogout(){
   if(cloudClient) await cloudClient.auth.signOut();
-  cloudUser=null; cloudStatus='Supabase настроен, нужен вход'; render();
+  cloudUser=null; cloudStatus='Нужен вход в аккаунт'; updateAuthGate(); render();
 }
 function cloudPanel(){
-  const isConfigured = !!(cloudConfig.enabled && cloudConfig.url && cloudConfig.key);
-  const isEmbedded = !!(EMBEDDED_CLOUD_CONFIG.url && EMBEDDED_CLOUD_CONFIG.key);
+  const isConfigured = isCloudConfigured();
   if(isConfigured && cloudUser){
-    return `<div class="card" style="margin-top:14px"><h3>Облако Supabase</h3>
-    <div class="cloudStatus"><span class="pill ok" data-cloud-status>${escapeHtml(cloudStatus)}</span><span class="pill">${escapeHtml(cloudUser.email || '')}</span></div>
-    <p class="mutedText">Автоматический режим включен. Данные загружаются при открытии сайта и сохраняются после изменений.</p>
-    <div class="formrow settingsForm"><button class="danger" onclick="cloudLogout()">Выйти</button><button onclick="cloudLoad(true)">Обновить из облака</button></div>
-    <details class="advancedBox"><summary>Технические настройки</summary>
-      <div class="formrow settingsForm"><label><input type="checkbox" id="supabaseEnabled" ${cloudConfig.enabled?'checked':''}> Включить облачный режим</label><input id="supabaseUrl" placeholder="Supabase Project URL" value="${escapeHtml(cloudConfig.url)}"><input id="supabaseKey" placeholder="Publishable / anon key" value="${escapeHtml(cloudConfig.key)}"><button onclick="saveCloudSettings()">Сохранить настройки</button><button class="danger" onclick="resetCloudSettings()">Сбросить подключение</button></div>
+    return `<div class="card" style="margin-top:14px"><h3>Аккаунт</h3>
+    <div class="cloudStatus"><span class="pill ok" data-cloud-status>Облако Supabase: подключено</span><span class="pill">${escapeHtml(cloudUser.email || '')}</span></div>
+    <p class="mutedText">Сессия сохранена в браузере. При следующем открытии приложение автоматически проверит вход и загрузит данные.</p>
+    <div class="formrow settingsForm"><button class="danger" onclick="cloudLogout()">Выйти из аккаунта</button></div>
+    <details class="advancedBox"><summary>Режим разработчика</summary>
+      <p class="mutedText">Технические данные обычно хранятся в <code>cloud-config.js</code>. Менять их нужно только если сменился проект Supabase.</p>
+      <div class="formrow settingsForm"><input id="supabaseUrl" placeholder="Supabase Project URL" value="${escapeHtml(cloudConfig.url)}"><input id="supabaseKey" placeholder="Publishable key" value="${escapeHtml(cloudConfig.key)}"><button onclick="saveCloudSettings()">Сохранить</button><button class="danger" onclick="resetCloudSettings()">Сбросить локальные настройки</button></div>
     </details></div>`;
   }
   if(isConfigured && !cloudUser){
-    return `<div class="card" style="margin-top:14px"><h3>Облако Supabase</h3>
+    return `<div class="card" style="margin-top:14px"><h3>Аккаунт</h3>
     <div class="cloudStatus"><span class="pill" data-cloud-status>${escapeHtml(cloudStatus)}</span></div>
-    <p>Подключение к базе уже настроено. Осталось войти один раз на этом устройстве. После входа сессия сохранится в браузере.</p>
-    <div class="formrow settingsForm"><input id="cloudEmail" type="email" placeholder="Email"><input id="cloudPassword" type="password" placeholder="Пароль"><button class="primary" onclick="cloudLogin()">Войти</button></div>
-    <details class="advancedBox"><summary>Технические настройки</summary>
-      <div class="formrow settingsForm"><label><input type="checkbox" id="supabaseEnabled" ${cloudConfig.enabled?'checked':''}> Включить облачный режим</label><input id="supabaseUrl" placeholder="Supabase Project URL" value="${escapeHtml(cloudConfig.url)}"><input id="supabaseKey" placeholder="Publishable / anon key" value="${escapeHtml(cloudConfig.key)}"><button onclick="saveCloudSettings()">Сохранить настройки</button></div>
-    </details></div>`;
+    <p>Вход выполняется на стартовом экране. После входа здесь будет отображаться статус аккаунта.</p></div>`;
   }
-  return `<div class="card" style="margin-top:14px"><h3>Облако Supabase</h3><p>Первичная настройка. Вставь Project URL и Publishable key один раз. Чтобы не вводить их на каждом устройстве, заполни файл <strong>cloud-config.js</strong> перед загрузкой на GitHub.</p>
-  <div class="cloudStatus"><span class="pill" data-cloud-status>${escapeHtml(cloudStatus)}</span></div>
-  <div class="formrow settingsForm"><label><input type="checkbox" id="supabaseEnabled" checked> Включить облачный режим</label><input id="supabaseUrl" placeholder="Supabase Project URL" value="${escapeHtml(cloudConfig.url)}"><input id="supabaseKey" placeholder="Publishable / anon key" value="${escapeHtml(cloudConfig.key)}"><button class="primary" onclick="saveCloudSettings()">Сохранить подключение</button></div>
-  <p class="mutedText">Secret/service_role key сюда вставлять нельзя.</p></div>`;
+  return `<div class="card" style="margin-top:14px"><h3>Аккаунт</h3><p>Supabase не настроен. Заполни <code>cloud-config.js</code> и обнови сайт.</p>
+  <details class="advancedBox"><summary>Режим разработчика</summary>
+  <div class="formrow settingsForm"><input id="supabaseUrl" placeholder="Supabase Project URL" value="${escapeHtml(cloudConfig.url)}"><input id="supabaseKey" placeholder="Publishable key" value="${escapeHtml(cloudConfig.key)}"><button class="primary" onclick="saveCloudSettings()">Сохранить локально</button></div>
+  </details></div>`;
 }
 async function resetCloudSettings(){
   if(!confirm('Сбросить подключение Supabase в этом браузере? Данные в облаке не удалятся.')) return;
@@ -474,8 +850,8 @@ async function resetCloudSettings(){
   localStorage.removeItem(CLOUD_CONFIG_KEY);
   storedCloudConfig = {};
   cloudConfig = { url: EMBEDDED_CLOUD_CONFIG.url || '', key: EMBEDDED_CLOUD_CONFIG.key || '', enabled: !!(EMBEDDED_CLOUD_CONFIG.url && EMBEDDED_CLOUD_CONFIG.key) };
-  cloudClient=null; cloudUser=null; cloudStatus=cloudConfig.enabled?'Supabase настроен, нужен вход':'Оффлайн режим';
-  initCloud().finally(()=>render());
+  cloudClient=null; cloudUser=null; cloudStatus=cloudConfig.enabled?'Нужен вход в аккаунт':'Оффлайн режим';
+  initCloud().finally(()=>{updateAuthGate();render();});
 }
 
 
@@ -492,6 +868,7 @@ function showView(id){
   render();
 }
 function render(){
+  updateAuthGate();
   pruneSelection();
   renderDashboard(); renderMonths(); renderIncome(); renderPurchases(); renderBalance(); renderSettings(); renderSearch();
 }
