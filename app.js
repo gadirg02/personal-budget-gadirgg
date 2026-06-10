@@ -1822,7 +1822,7 @@ function incomeTotals(month){
   const expected = rows.filter(x=>!incomeIsAvailable(x)).reduce((s,x)=>s+num(x.amount),0);
   return {available, expected, forecast: available + expected};
 }
-function upcomingIncomes(days=30){
+function upcomingIncomes(days=15){
   const now = new Date(todayDateString()+'T00:00:00');
   return state.incomes
     .filter(x=>x.date && !incomeIsAvailable(x))
@@ -1834,7 +1834,7 @@ function upcomingIncomes(days=30){
     .filter(x=>x.diff>=0 && x.diff<=days)
     .sort((a,b)=>a.diff-b.diff || String(a.date).localeCompare(String(b.date)));
 }
-function upcomingIncomePanel(days=30){
+function upcomingIncomePanel(days=15){
   const items = upcomingIncomes(days);
   if(!items.length) return `<div class="card"><h3>Ближайшие поступления</h3><p class="mutedText">Ожидаемых доходов на ближайшие ${days} дней нет.</p></div>`;
   return `<div class="card"><div class="toolbar"><h3>Ближайшие поступления</h3><span class="pill">${items.length}</span></div><div class="upcomingList scrollList">${items.map(x=>`<div class="upcomingItem incomeUpcoming"><div><strong>${escapeHtml(x.type || x.source || 'Доход')}</strong><span>${escapeHtml(x.month)} · ${escapeHtml(x.date)} · ${x.diff===0?'сегодня':('через '+x.diff+' дн.')}</span>${x.comment?`<small>${escapeHtml(x.comment)}</small>`:''}</div><b>+${rub(x.amountValue)}</b></div>`).join('')}</div></div>`;
@@ -1876,7 +1876,7 @@ function renderDashboard(){
   const year = allTotals();
   document.getElementById('dashboard').innerHTML = `
     <div class="dashboardTopFull">${upcomingPanel(14)}</div>
-    <div style="margin-top:14px">${upcomingIncomePanel(30)}</div>
+    <div style="margin-top:14px">${upcomingIncomePanel(15)}</div>
     <div class="card dashboardControls"><div><h3>Сводка за месяц</h3><p>Главные цифры по выбранному месяцу. Будущие доходы показаны отдельно и пока не участвуют в остатке.</p></div><select onchange="currentMonth=this.value;render()">${options(state.months,currentMonth)}</select></div>
     <div class="dashSection"><h3>${currentMonth}: деньги за месяц</h3><div class="grid">${kpi('Доходы получены',rub(t.incomes))}${kpi('Ожидается доходов',rub(t.expectedIncomes),'не учитывается до даты')}${kpi('Расходы',rub(t.expensesFact))}${kpi('Свободный остаток',rub(t.freeFact))}${kpi('Прогноз с будущими доходами',rub(t.forecastFreeFact))}${kpi('План расходов',rub(t.expensesPlan))}</div></div>
     <div class="dashSection"><h3>Планирование</h3><div class="grid">${kpi('Выделено на цели',rub(year.goalsAllocated))}${kpi('Свободно после целей',rub(year.freeAfterGoals))}${kpi('Резерв уже есть',rub(reserveUiAmount()))}${kpi('Резерв готов',pct(reserveUiProgress()))}</div></div>
