@@ -2172,3 +2172,89 @@ function renderSettings(){
 }
 
 try{ render(); }catch(e){ console.error('Release 3.3.1 render failed', e); }
+
+/* --- Release 3.3.2: native-looking searchable selects + cleaner drag UI --- */
+function jsArg(v){ return JSON.stringify(String(v ?? '')); }
+function smartSelectMarkup(id, arr, value='', placeholder='Выбрать', mode='form', list='', itemId='', key='', secondaryKey='', disabled=''){
+  const safeId = String(id).replace(/[^a-zA-Z0-9_:-]/g,'_');
+  const selected = String(value || '');
+  const label = selected || placeholder;
+  const opts = (arr || []).map(v=>`<button type="button" class="smartOption" data-search="${escapeHtml(String(v).toLowerCase())}" onclick='smartSelectChoose(${jsArg(safeId)}, ${jsArg(v)}, ${jsArg(mode)}, ${jsArg(list)}, ${jsArg(itemId)}, ${jsArg(key)}, ${jsArg(secondaryKey)})'>${escapeHtml(v)}</button>`).join('');
+  return `<div class="smartSelect ${disabled?'disabled':''}" id="${safeId}_wrap">
+    <input type="hidden" id="${safeId}" value="${escapeHtml(selected)}">
+    <button type="button" class="smartSelectBtn" onclick="openSmartSelect(event,'${safeId}')" ${disabled?'disabled':''}><span id="${safeId}_label">${escapeHtml(label)}</span><span class="smartCaret">▾</span></button>
+    <div class="smartMenu" id="${safeId}_menu">
+      <input class="smartSearch" placeholder="Поиск..." oninput="filterSmartOptions('${safeId}', this.value)" onclick="event.stopPropagation()">
+      <div class="smartOptions" id="${safeId}_options">${opts || '<div class="smartEmpty">Нет категорий</div>'}</div>
+    </div>
+  </div>`;
+}
+function searchableField(id, arr, value='', attrs=''){
+  const ph = (attrs.match(/placeholder="([^"]+)"/)||[])[1] || 'Выбрать';
+  const disabled = /disabled/.test(attrs) ? 'disabled' : '';
+  return smartSelectMarkup(id, arr, value, ph, 'form', '', '', '', '', disabled);
+}
+function openSmartSelect(ev,id){
+  ev.stopPropagation();
+  document.querySelectorAll('.smartSelect.open').forEach(el=>{ if(el.id !== id+'_wrap') el.classList.remove('open'); });
+  const wrap=document.getElementById(id+'_wrap');
+  if(!wrap) return;
+  wrap.classList.toggle('open');
+  if(wrap.classList.contains('open')){
+    const search=document.querySelector(`#${CSS.escape(id+'_menu')} .smartSearch`);
+    if(search){ search.value=''; filterSmartOptions(id,''); setTimeout(()=>search.focus(),30); }
+  }
+}
+function filterSmartOptions(id,q){
+  const query=String(q||'').trim().toLowerCase();
+  document.querySelectorAll(`#${CSS.escape(id+'_options')} .smartOption`).forEach(btn=>{
+    btn.style.display = !query || btn.dataset.search.includes(query) ? '' : 'none';
+  });
+}
+function smartSelectChoose(id,value,mode,list,itemId,key,secondaryKey){
+  const hidden=document.getElementById(id); if(hidden) hidden.value=value;
+  const label=document.getElementById(id+'_label'); if(label) label.textContent=value || 'Выбрать';
+  document.getElementById(id+'_wrap')?.classList.remove('open');
+  if(mode==='row'){
+    upd(list,itemId,key,value,{silent:true});
+    if(secondaryKey) upd(list,itemId,secondaryKey,value,{silent:true});
+    render();
+  }
+}
+if(!window.__smartSelectCloseBound){
+  document.addEventListener('click',()=>document.querySelectorAll('.smartSelect.open').forEach(el=>el.classList.remove('open')));
+  window.__smartSelectCloseBound=true;
+}
+function dragHandleFor(list,id){ return `<span class="dragHandle" draggable="true" ondragstart="startRowDrag(event,'${list}','${id}')" ondragend="endRowDrag(event)" title="Удерживай и перетащи">☰</span>`; }
+
+function expenseTable(rows){
+ if(!rows.length) return `<div class="empty">Записей нет</div>`;
+ return `<table class="expenseTable"><thead><tr><th class="checkCol"><input type="checkbox" ${rows.length && rows.every(x=>selected.expenses.has(x.id))?'checked':''} onchange="toggleVisible('expenses', this.checked)"></th><th class="dragCol"></th><th>Категория</th><th>План</th><th>Факт</th><th>Дата</th><th>Оплачено</th><th>Комментарий</th><th>Приоритет</th><th></th></tr></thead><tbody>
+ ${rows.map(x=>{const disabled=archivedAttr(x.month); return `<tr ondragover="allowRowDrop(event)" ondragleave="leaveRowDrop(event)" ondrop="dropRow(event,'expenses','${x.id}')">
+ <td class="checkCol"><input type="checkbox" ${selected.expenses.has(x.id)?'checked':''} onchange="toggleOne('expenses','${x.id}',this.checked)" ${disabled}></td>
+ <td class="dragCol">${disabled?'':dragHandleFor('expenses',x.id)}</td>
+ <td>${smartSelectMarkup(`cat_${x.id}`, state.expenseCategories, x.category, 'Категория', 'row', 'expenses', x.id, 'category', '', disabled)}</td>
+ <td><input ${amountAttrs()} value="${escapeHtml(x.planAmount)}" oninput="amountInput(this,'expenses','${x.id}','planAmount')" onblur="amountBlur(this,'expenses','${x.id}','planAmount');render()" placeholder="0" ${disabled}></td>
+ <td><input ${amountAttrs()} value="${escapeHtml(x.factAmount)}" oninput="amountInput(this,'expenses','${x.id}','factAmount')" onblur="amountBlur(this,'expenses','${x.id}','factAmount');render()" placeholder="0" ${disabled}></td>
+ <td><input type="date" value="${escapeHtml(x.date)}" onchange="upd('expenses','${x.id}','date',this.value)" ${disabled}></td>
+ <td><label class="paidLabel"><input type="checkbox" ${x.paid?'checked':''} onchange="upd('expenses','${x.id}','paid',this.checked)" ${disabled}> ${expenseStatusPill(x)}</label></td>
+ <td><textarea class="commentArea" oninput="upd('expenses','${x.id}','comment',this.value,{silent:true})" onblur="render()" ${disabled}>${escapeHtml(x.comment)}</textarea></td>
+ <td><select onchange="upd('expenses','${x.id}','priority',this.value)" ${disabled}>${options(state.priorities,x.priority)}</select></td>
+ <td><button class="danger subtleDanger" onclick="del('expenses','${x.id}')" ${disabled}>Удалить</button></td></tr>`}).join('')}</tbody></table>`;
+}
+function renderIncome(){
+ ensureDataModelRelease();
+ document.getElementById('income').innerHTML=`<div class="card"><div class="toolbar"><div><h3>Доходы</h3><p class="mutedText">Будущие доходы не участвуют в остатках до наступления даты. Строки можно менять местами перетаскиванием.</p></div><div class="toolbarActions">${bulkDeleteButton('incomes')}<button class="primary" onclick="addIncome()">Добавить доход</button></div></div>
+ <div class="formrow"><input id="inDate" type="date"><select id="inMonth">${options(state.months,currentMonth)}</select>${searchableField('inType', state.incomeCategories, '', 'placeholder="Категория дохода"')}<input id="inAmount" ${amountAttrs()} oninput="amountInput(this)" onblur="amountBlur(this)" placeholder="Сумма"><input id="inComment" placeholder="Комментарий"></div>
+ <div class="tableWrap">${incomeTable()}</div></div>`;
+}
+function incomeTable(){
+ ensureDataModelRelease();
+ const rows = orderedIncomes();
+ if(!rows.length) return `<div class="empty">Доходов нет</div>`;
+ return `<table class="incomeTable"><thead><tr><th class="checkCol"><input type="checkbox" ${rows.length && rows.every(x=>selected.incomes.has(x.id))?'checked':''} onchange="toggleVisible('incomes', this.checked)"></th><th class="dragCol"></th><th>Дата</th><th>Месяц</th><th>Категория дохода</th><th>Сумма</th><th>Статус</th><th>Комментарий</th><th></th></tr></thead><tbody>
+ ${rows.map(x=>{const disabled=archivedAttr(x.month); const st=incomeStatus(x); return `<tr ondragover="allowRowDrop(event)" ondragleave="leaveRowDrop(event)" ondrop="dropRow(event,'incomes','${x.id}')"><td class="checkCol"><input type="checkbox" ${disabled} ${selected.incomes.has(x.id)?'checked':''} onchange="toggleOne('incomes','${x.id}',this.checked)"></td><td class="dragCol">${disabled?'':dragHandleFor('incomes',x.id)}</td><td><input type="date" value="${escapeHtml(x.date)}" onchange="upd('incomes','${x.id}','date',this.value);render()" ${disabled}></td><td><select onchange="upd('incomes','${x.id}','month',this.value);render()" ${disabled}>${options(state.months,x.month)}</select></td><td>${smartSelectMarkup(`incomeCat_${x.id}`, state.incomeCategories, x.type || x.source, 'Категория дохода', 'row', 'incomes', x.id, 'type', 'source', disabled)}</td><td><input ${amountAttrs()} value="${escapeHtml(x.amount)}" oninput="amountInput(this,'incomes','${x.id}','amount')" onblur="amountBlur(this,'incomes','${x.id}','amount');render()" placeholder="0" ${disabled}></td><td><span class="pill ${st.cls}">${st.text}</span></td><td><input value="${escapeHtml(x.comment)}" oninput="upd('incomes','${x.id}','comment',this.value,{silent:true})" onblur="render()" ${disabled}></td><td><button class="danger subtleDanger" onclick="del('incomes','${x.id}')" ${disabled}>Удалить</button></td></tr>`}).join('')}</tbody></table>`;
+}
+function categoryManager(kind,title,description,inputId,arr){
+  return `<div class="card compactCard categoriesSettings"><h3>${escapeHtml(title)}</h3><p>${escapeHtml(description.replace('Порядок можно менять стрелками.','Порядок можно менять перетаскиванием.'))}</p><div class="compactAdd"><input id="${inputId}" placeholder="Новая категория"><button class="primary" onclick="addCategory('${kind}')">Добавить</button></div><div class="categoryColumn">${(arr||[]).map(c=>`<div class="categoryRow" ondragover="allowRowDrop(event)" ondragleave="leaveRowDrop(event)" ondrop="dropCategory(event,'${kind}','${escapeHtml(c)}')"><span class="dragHandle" draggable="true" ondragstart="startCategoryDrag(event,'${kind}','${escapeHtml(c)}')" ondragend="endRowDrag(event)" title="Удерживай и перетащи">☰</span><span class="categoryName">${escapeHtml(c)}</span><button class="danger miniBtn subtleDanger" onclick="removeCategory('${kind}','${escapeHtml(c)}')">Удалить</button></div>`).join('')}</div></div>`;
+}
