@@ -22,3 +22,4 @@ window.BUDGET_SUPABASE_CONFIG = {
 
 В поле `key` нужно вставить Supabase publishable/anon key. Secret/service_role key использовать нельзя.
 
+
