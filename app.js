@@ -1028,28 +1028,66 @@ function addPurchase(){
 }
 function balanceTable(){return `<div class="tableWrap"><table class="balanceTable"><thead><tr><th>Месяц</th><th>Доходы</th><th>План расходов</th><th>Факт расходов</th><th>Свободный остаток</th></tr></thead><tbody>${state.months.map(m=>{const t=totals(m);return `<tr><td>${m}</td><td>${rub(t.incomes)}</td><td>${rub(t.expensesPlan)}</td><td>${rub(t.expensesFact)}</td><td>${rub(t.freeFact)}</td></tr>`}).join('')}</tbody></table></div>`}
 
+
+function normalizeSearchText(value){
+  return String(value ?? '').toLowerCase().trim().replace(/ё/g,'е');
+}
+function normalizeSearchAmount(value){
+  const raw = String(value ?? '').trim();
+  if(!raw) return '';
+  const onlyAmount = raw.replace(/\s/g,'').replace(',', '.');
+  if(!/^\d+(\.\d{1,2})?$/.test(onlyAmount)) return '';
+  return String(Number(onlyAmount).toFixed(2));
+}
+function searchMatch(parts, query){
+  const q = normalizeSearchText(query);
+  if(!q) return false;
+  const amountQuery = normalizeSearchAmount(q);
+  const text = parts.map(x => normalizeSearchText(x)).join(' ');
+  if(text.includes(q)) return true;
+  if(amountQuery){
+    return parts.some(x => {
+      const token = normalizeSearchAmount(x);
+      return token && token === amountQuery;
+    });
+  }
+  return false;
+}
 function renderSearch(){
   const el = document.getElementById('search'); if(!el) return;
-  const q = searchQuery.trim().toLowerCase();
+  const q = searchQuery.trim();
   const scope = searchScope;
   const rows=[];
-  if(q || scope === 'upcoming'){
+  const hasQuery = !!q;
+  if(hasQuery || scope === 'upcoming'){
     if(scope==='all' || scope==='expenses' || scope==='upcoming'){
       state.expenses.forEach(x=>{
-        const h=haystack([x.month,x.category,x.planAmount,x.factAmount,x.date,x.comment,x.priority,x.status]);
         const diff=dateDiffDays(x.date);
         const isUpcoming = scope==='upcoming' ? (!x.paid && x.date && diff!==null && diff<=30) : true;
-        if(isUpcoming && (!q || h.includes(q) || h.includes(cleanAmountValue(q,true)))) rows.push({type:'Расход', month:x.month, title:x.category, amount:x.factAmount || x.planAmount, date:x.date, comment:x.comment, status:x.paid?'Оплачено':'Не оплачено'});
+        const parts=[x.month,x.category,x.planAmount,x.factAmount,x.date,x.comment,x.priority,x.status, x.paid?'оплачено':'не оплачено'];
+        if(isUpcoming && (scope==='upcoming' ? (!hasQuery || searchMatch(parts,q)) : searchMatch(parts,q))){
+          rows.push({type:'Расход', month:x.month, title:x.category, amount:x.factAmount || x.planAmount, date:x.date, comment:x.comment, status:x.paid?'Оплачено':'Не оплачено'});
+        }
       });
     }
     if(scope==='all' || scope==='incomes'){
-      state.incomes.forEach(x=>{const h=haystack([x.month,x.type,x.source,x.amount,x.date,x.comment]); if(h.includes(q) || h.includes(cleanAmountValue(q,true))) rows.push({type:'Доход', month:x.month, title:x.type || x.source || 'Доход', amount:x.amount, date:x.date, comment:x.comment, status:'+'});});
+      state.incomes.forEach(x=>{
+        const st=incomeStatus(x);
+        const parts=[x.month,x.type,x.source,x.amount,x.date,x.comment,st.text];
+        if(searchMatch(parts,q)) rows.push({type:'Доход', month:x.month, title:x.type || x.source || 'Доход', amount:x.amount, date:x.date, comment:x.comment, status:st.text});
+      });
     }
     if(scope==='all' || scope==='goals'){
-      state.purchases.forEach(x=>{const h=haystack([x.name,x.targetAmount,x.factAmount,x.percent,x.priority,x.status,x.comment]); if(h.includes(q) || h.includes(cleanAmountValue(q,true))) rows.push({type:'Цель', month:'-', title:x.name, amount:(x.paid?purchasePaidAmount(x):goalAllocatedAmount(x)) || x.targetAmount, date:'', comment:x.comment, status:x.paid?'Оплачено':'План'});});
+      state.purchases.forEach(x=>{
+        const parts=[x.name,x.targetAmount,x.factAmount,x.percent,x.priority,x.status,x.comment,x.paid?'оплачено':'не оплачено'];
+        if(searchMatch(parts,q)) rows.push({type:'Цель', month:'-', title:x.name, amount:(x.paid?purchasePaidAmount(x):goalAllocatedAmount(x)) || x.targetAmount, date:'', comment:x.comment, status:x.paid?'Оплачено':'План'});
+      });
     }
   }
-  el.innerHTML = `<div class="card"><h3>Поиск</h3><p class="mutedText">Ищет по расходам, доходам, целям, комментариям, датам и суммам. Суммы ищутся одинаково в формате 4400, 4400.00 или 4 400,00.</p><div class="formrow searchForm"><input id="searchInput" placeholder="Например: патент, 4400.00, телефон" value="${escapeHtml(searchQuery)}" oninput="searchQuery=this.value;renderSearch()"><select id="searchScope" onchange="searchScope=this.value;renderSearch()"><option value="all" ${scope==='all'?'selected':''}>Все разделы</option><option value="expenses" ${scope==='expenses'?'selected':''}>Расходы</option><option value="incomes" ${scope==='incomes'?'selected':''}>Доходы</option><option value="goals" ${scope==='goals'?'selected':''}>Цели</option><option value="upcoming" ${scope==='upcoming'?'selected':''}>Ближайшие платежи</option></select></div></div><div class="card"><h3>Результаты ${rows.length?`(${rows.length})`:''}</h3>${searchResultsTable(rows)}</div>`;
+  const hint = scope==='upcoming'
+    ? 'Показывает ближайшие платежи. Можно дополнительно отфильтровать их по тексту или сумме.'
+    : 'Ищет только совпадения по расходам, доходам, целям, комментариям, датам и суммам. Суммы ищутся одинаково в формате 4400, 4400.00 или 4 400,00.';
+  el.innerHTML = `<div class="card"><h3>Поиск</h3><p class="mutedText">${hint}</p><div class="formrow searchForm"><input id="searchInput" placeholder="Например: патент, 4400.00, телефон" value="${escapeHtml(searchQuery)}" oninput="searchQuery=this.value;renderSearch()"><select id="searchScope" onchange="searchScope=this.value;renderSearch()"><option value="all" ${scope==='all'?'selected':''}>Все разделы</option><option value="expenses" ${scope==='expenses'?'selected':''}>Расходы</option><option value="incomes" ${scope==='incomes'?'selected':''}>Доходы</option><option value="goals" ${scope==='goals'?'selected':''}>Цели</option><option value="upcoming" ${scope==='upcoming'?'selected':''}>Ближайшие платежи</option></select></div></div><div class="card"><h3>Результаты ${rows.length?`(${rows.length})`:''}</h3>${searchResultsTable(rows)}</div>`;
   const input=document.getElementById('searchInput'); if(input && document.activeElement!==input){ input.focus(); input.setSelectionRange(input.value.length,input.value.length); }
 }
 
