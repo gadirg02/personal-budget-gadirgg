@@ -1797,3 +1797,91 @@ function deleteReserveTransaction(id){
   syncReserveFullFlag();
   save(); render();
 }
+
+/* --- Future income release: expected incomes are not counted until their date --- */
+function todayDateString(){
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+function incomeIsAvailable(income){
+  // Empty date is treated as already available for backward compatibility with old imported data.
+  if(!income || !income.date) return true;
+  return String(income.date) <= todayDateString();
+}
+function incomeStatus(income){
+  return incomeIsAvailable(income)
+    ? {text:'Получен', cls:'okPill'}
+    : {text:'Ожидается', cls:'warnPill'};
+}
+function incomeTotals(month){
+  const rows = state.incomes.filter(x=>x.month===month);
+  const available = rows.filter(incomeIsAvailable).reduce((s,x)=>s+num(x.amount),0);
+  const expected = rows.filter(x=>!incomeIsAvailable(x)).reduce((s,x)=>s+num(x.amount),0);
+  return {available, expected, forecast: available + expected};
+}
+function upcomingIncomes(days=30){
+  const now = new Date(todayDateString()+'T00:00:00');
+  return state.incomes
+    .filter(x=>x.date && !incomeIsAvailable(x))
+    .map(x=>({
+      ...x,
+      diff: Math.ceil((new Date(x.date+'T00:00:00') - now) / 86400000),
+      amountValue: num(x.amount)
+    }))
+    .filter(x=>x.diff>=0 && x.diff<=days)
+    .sort((a,b)=>a.diff-b.diff || String(a.date).localeCompare(String(b.date)));
+}
+function upcomingIncomePanel(days=30){
+  const items = upcomingIncomes(days);
+  if(!items.length) return `<div class="card"><h3>Ближайшие поступления</h3><p class="mutedText">Ожидаемых доходов на ближайшие ${days} дней нет.</p></div>`;
+  return `<div class="card"><div class="toolbar"><h3>Ближайшие поступления</h3><span class="pill">${items.length}</span></div><div class="upcomingList scrollList">${items.map(x=>`<div class="upcomingItem incomeUpcoming"><div><strong>${escapeHtml(x.type || x.source || 'Доход')}</strong><span>${escapeHtml(x.month)} · ${escapeHtml(x.date)} · ${x.diff===0?'сегодня':('через '+x.diff+' дн.')}</span>${x.comment?`<small>${escapeHtml(x.comment)}</small>`:''}</div><b>+${rub(x.amountValue)}</b></div>`).join('')}</div></div>`;
+}
+function totals(month){
+  const inc = incomeTotals(month);
+  const incomes = inc.available;
+  const expectedIncomes = inc.expected;
+  const forecastIncomes = inc.forecast;
+  const expensesPlan = state.expenses.filter(x=>x.month===month).reduce((s,x)=>s+num(x.planAmount),0);
+  const expensesFact = state.expenses.filter(x=>x.month===month).reduce((s,x)=>s+num(x.factAmount),0);
+  const freePlan = incomes - expensesPlan;
+  const freeFact = incomes - expensesFact;
+  const forecastFreeFact = forecastIncomes - expensesFact;
+  const positiveFreeFact = Math.max(freeFact, 0);
+  const goalPercentTotal = unpaidGoals ? unpaidGoals().reduce((s,x)=>s+num(x.percent),0) : state.purchases.reduce((s,x)=>s+num(x.percent),0);
+  const goalAllocated = state.purchases.reduce((s,x)=>s+(goalMonthAmount ? goalMonthAmount(x, month) : 0),0);
+  const undistributed = Math.max(positiveFreeFact - goalAllocated, 0);
+  return {incomes, expectedIncomes, forecastIncomes, expensesPlan, expensesFact, freePlan, freeFact, forecastFreeFact, positiveFreeFact, goalPercentTotal, goalAllocated, undistributed};
+}
+function totalsNoGoals(month){
+  const incomes = incomeTotals(month).available;
+  const expensesFact = state.expenses.filter(x=>x.month===month).reduce((s,x)=>s+num(x.factAmount),0);
+  return {incomes, expensesFact, freeFact: incomes-expensesFact};
+}
+function renderIncome(){
+ document.getElementById('income').innerHTML=`<div class="card"><div class="toolbar"><div><h3>Доходы</h3><p class="mutedText">Доход с будущей датой отображается как «Ожидается» и не участвует в остатках до наступления даты.</p></div><div class="toolbarActions">${bulkDeleteButton('incomes')}<button class="primary" onclick="addIncome()">Добавить доход</button></div></div>
+ <div class="formrow"><input id="inDate" type="date"><select id="inMonth">${options(state.months,currentMonth)}</select><select id="inType">${options(state.incomeTypes)}</select><input id="inAmount" ${amountAttrs()} oninput="amountInput(this)" onblur="amountBlur(this)" placeholder="Сумма"><input id="inComment" placeholder="Комментарий"></div>
+ <div class="tableWrap">${incomeTable()}</div></div>`;
+}
+function incomeTable(){
+ if(!state.incomes.length) return `<div class="empty">Доходов нет</div>`;
+ return `<table class="incomeTable"><thead><tr><th class="checkCol"><input type="checkbox" ${state.incomes.length && state.incomes.every(x=>selected.incomes.has(x.id))?'checked':''} onchange="toggleVisible('incomes', this.checked)"></th><th>Дата</th><th>Месяц</th><th>Источник</th><th>Сумма</th><th>Статус</th><th>Комментарий</th><th></th></tr></thead><tbody>
+ ${state.incomes.map(x=>{const disabled=archivedAttr(x.month); const st=incomeStatus(x);return `<tr><td class="checkCol"><input type="checkbox" ${disabled} ${selected.incomes.has(x.id)?'checked':''} onchange="toggleOne('incomes','${x.id}',this.checked)"></td><td><input type="date" value="${x.date}" onchange="upd('incomes','${x.id}','date',this.value);render()" ${disabled}></td><td><select onchange="upd('incomes','${x.id}','month',this.value);render()" ${disabled}>${options(state.months,x.month)}</select></td><td><select onchange="upd('incomes','${x.id}','type',this.value);upd('incomes','${x.id}','source',this.value)" ${disabled}>${options(state.incomeTypes,x.type || x.source)}</select></td><td><input ${amountAttrs()} value="${escapeHtml(x.amount)}" oninput="amountInput(this,'incomes','${x.id}','amount')" onblur="amountBlur(this,'incomes','${x.id}','amount');render()" placeholder="0" ${disabled}></td><td><span class="pill ${st.cls}">${st.text}</span></td><td><input value="${escapeHtml(x.comment)}" oninput="upd('incomes','${x.id}','comment',this.value)" ${disabled}></td><td><button class="danger" onclick="del('incomes','${x.id}')" ${disabled}>Удалить</button></td></tr>`}).join('')}</tbody></table>`;
+}
+function renderDashboard(){
+  ensureRelease3State();
+  const t = totals(currentMonth);
+  const year = allTotals();
+  document.getElementById('dashboard').innerHTML = `
+    <div class="dashboardTopFull">${upcomingPanel(14)}</div>
+    <div style="margin-top:14px">${upcomingIncomePanel(30)}</div>
+    <div class="card dashboardControls"><div><h3>Сводка за месяц</h3><p>Главные цифры по выбранному месяцу. Будущие доходы показаны отдельно и пока не участвуют в остатке.</p></div><select onchange="currentMonth=this.value;render()">${options(state.months,currentMonth)}</select></div>
+    <div class="dashSection"><h3>${currentMonth}: деньги за месяц</h3><div class="grid">${kpi('Доходы получены',rub(t.incomes))}${kpi('Ожидается доходов',rub(t.expectedIncomes),'не учитывается до даты')}${kpi('Расходы',rub(t.expensesFact))}${kpi('Свободный остаток',rub(t.freeFact))}${kpi('Прогноз с будущими доходами',rub(t.forecastFreeFact))}${kpi('План расходов',rub(t.expensesPlan))}</div></div>
+    <div class="dashSection"><h3>Планирование</h3><div class="grid">${kpi('Выделено на цели',rub(year.goalsAllocated))}${kpi('Свободно после целей',rub(year.freeAfterGoals))}${kpi('Резерв уже есть',rub(reserveUiAmount()))}${kpi('Резерв готов',pct(reserveUiProgress()))}</div></div>
+    <div style="margin-top:14px">${reserveSummaryCard()}</div>
+    <div class="card" style="margin-top:14px"><h3>Цели: прогноз</h3><p class="mutedText">Цели считаются от остатка после резерва. Будущие доходы попадут в расчет после наступления даты.</p>${planningGoalsTable()}</div>
+    <div class="card" style="margin-top:14px"><h3>Остатки по месяцам</h3>${balanceTable()}</div>`;
+}
+function balanceTable(){return `<div class="tableWrap"><table class="balanceTable"><thead><tr><th>Месяц</th><th>Доходы получены</th><th>Ожидается</th><th>План расходов</th><th>Факт расходов</th><th>Свободный остаток</th></tr></thead><tbody>${state.months.map(m=>{const t=totals(m);return `<tr><td>${m}</td><td>${rub(t.incomes)}</td><td>${rub(t.expectedIncomes)}</td><td>${rub(t.expensesPlan)}</td><td>${rub(t.expensesFact)}</td><td>${rub(t.freeFact)}</td></tr>`}).join('')}</tbody></table></div>`}
