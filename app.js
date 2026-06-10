@@ -553,7 +553,7 @@ function renderMonths(){
   const rows=state.expenses.filter(x=>x.month===currentMonth);
   const t=totals(currentMonth);
   const archived = isMonthArchived(currentMonth);
-  document.getElementById('months').innerHTML = `${monthTabs()}${archived?'<div class="card archiveNotice">Этот месяц архивирован. Редактирование расходов отключено.</div>':''}${notificationPanel(currentMonth)}<div class="grid" style="margin-bottom:14px">${kpi('Доходы',rub(t.incomes))}${kpi('Расходы факт',rub(t.expensesFact))}${kpi('Остаток',rub(t.freeFact))}${kpi('План расходов',rub(t.expensesPlan))}</div><div class="card">
+  document.getElementById('months').innerHTML = `${monthTabs()}${archived?'<div class="card archiveNotice">Этот месяц архивирован. Редактирование расходов отключено.</div>':''}${notificationPanel(currentMonth)}<div class="grid" style="margin-bottom:14px">${kpi('Доходы',rub(t.incomes))}${kpi('Расходы факт',rub(t.expensesFact))}${kpi('Остаток',rub(t.freeFact))}${kpi('В цели',rub(t.goalAllocated))}</div><div class="card">
     <div class="toolbar"><h3>${currentMonth} — расходы ${archivedNote(currentMonth)}</h3><div class="toolbarActions">${bulkDeleteButton('expenses', archived)}<button class="primary" onclick="addExpense()" ${archived?'disabled':''}>Добавить расход</button></div></div>
     ${expenseForm()}
     <div class="tableWrap">${expenseTable(rows)}</div></div>`;
@@ -2080,11 +2080,16 @@ function reorderVisibleList(list, sourceId, targetId, predicate){
 }
 function dragHandle(){ return `<span class="dragHandle" title="Удерживай и перетащи">☰</span>`; }
 
+function expenseMonthDashboard(){
+  const t = totals(currentMonth);
+  return `<div class="grid expenseDashboards" style="margin-bottom:14px">${kpi('Доходы',rub(t.incomes))}${kpi('Расходы факт',rub(t.expensesFact))}${kpi('Остаток',rub(t.freeFact))}${kpi('План расходов',rub(t.expensesPlan))}</div>`;
+}
+
 function renderMonths(){
   ensureDataModelRelease();
   const archived=isMonthArchived(currentMonth);
   const rows=orderedExpensesForMonth(currentMonth);
-  document.getElementById('months').innerHTML = `${monthTabs()}<div class="card ${archived?'archivedCard':''}">
+  document.getElementById('months').innerHTML = `${monthTabs()}${expenseMonthDashboard()}<div class="card ${archived?'archivedCard':''}">
     <div class="toolbar"><div><h3>${currentMonth} — расходы</h3>${archived?'<p class="mutedText">Месяц архивирован. Редактирование отключено.</p>':'<p class="mutedText">Строки можно менять местами: удерживай значок ☰ и перетаскивай.</p>'}</div><div class="toolbarActions">${bulkDeleteButton('expenses')}<button class="primary" onclick="addExpense()" ${archived?'disabled':''}>Добавить расход</button></div></div>
     ${expenseForm()}
     <div class="tableWrap">${expenseTable(rows)}</div></div>`;
