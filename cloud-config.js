@@ -1,8 +1,8 @@
-// Настройка облака Supabase.
-// Заполни эти два поля один раз перед загрузкой на GitHub Pages,
-// тогда на телефоне и других устройствах не нужно будет вводить URL и ключ базы.
-// Используй только Project URL и Publishable / anon key. Secret/service_role key сюда вставлять нельзя.
+// Настройка Supabase для личного бюджета.
+// Этот файл загружается вместе с сайтом, поэтому пользователь больше не вводит URL/key в интерфейсе.
+// ВАЖНО: сюда можно вставлять только Project URL и publishable/anon key.
+// Secret/service_role key сюда вставлять нельзя.
 window.BUDGET_SUPABASE_CONFIG = {
-  url: '',
-  key: ''
+  url: 'https://gzipgbtlamynjwlaefku.supabase.co',
+  key: 'sb_publishable_b30Ebgn6zuFOb01xYH5vuA_gEnuYQOn'
 };
