@@ -4,5 +4,5 @@
 // Secret/service_role key сюда вставлять нельзя.
 window.BUDGET_SUPABASE_CONFIG = {
   url: 'https://gzipgbtlamynjwlaefku.supabase.co',
-  key: 'sb_publishable_b30Ebgn6zuFOb01xYH5vuA_gEnuYQOn'
+  key: 'PASTE_YOUR_PUBLISHABLE_KEY_HERE'
 };

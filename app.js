@@ -2026,3 +2026,149 @@ function recurringTable(){
 }
 ensureDataModelRelease();
 try{ render(); }catch(e){ console.error('Release 3.3 render failed', e); }
+
+/* --- Release 3.3.1: drag-and-drop ordering + cleaner searchable fields --- */
+let dragState = { kind: null, id: null };
+
+function searchableField(id, arr, value='', attrs=''){
+  const listId = `${id}_list`;
+  return `<div class="searchSelectWrap"><input class="searchSelectInput" id="${id}" list="${listId}" value="${escapeHtml(value)}" autocomplete="off" ${attrs}>${dataList(listId,arr)}<span class="searchSelectIcon">⌕</span></div>`;
+}
+
+function normalizeOrderFor(list){
+  const arr = state[list] || [];
+  arr.forEach((x,i)=>{ if(typeof x.sortOrder !== 'number') x.sortOrder = i; });
+  arr.sort((a,b)=>(a.sortOrder??0)-(b.sortOrder??0));
+}
+function orderedExpensesForMonth(month){
+  normalizeOrderFor('expenses');
+  return state.expenses.filter(x=>x.month===month).sort((a,b)=>(a.sortOrder??0)-(b.sortOrder??0));
+}
+function orderedIncomes(){
+  normalizeOrderFor('incomes');
+  return state.incomes.sort((a,b)=>(a.sortOrder??0)-(b.sortOrder??0));
+}
+function startRowDrag(ev,list,id){
+  dragState = {kind:list,id};
+  ev.dataTransfer.effectAllowed='move';
+  ev.dataTransfer.setData('text/plain', `${list}:${id}`);
+  ev.currentTarget.classList.add('dragging');
+}
+function endRowDrag(ev){
+  ev.currentTarget.classList.remove('dragging');
+  document.querySelectorAll('.dragOver').forEach(x=>x.classList.remove('dragOver'));
+}
+function allowRowDrop(ev){ ev.preventDefault(); ev.currentTarget.classList.add('dragOver'); }
+function leaveRowDrop(ev){ ev.currentTarget.classList.remove('dragOver'); }
+function dropRow(ev,list,targetId){
+  ev.preventDefault();
+  ev.currentTarget.classList.remove('dragOver');
+  const sourceId = dragState.id || (ev.dataTransfer.getData('text/plain').split(':')[1]);
+  if(!sourceId || sourceId===targetId) return;
+  if(list==='expenses') reorderVisibleList('expenses', sourceId, targetId, x=>x.month===currentMonth);
+  if(list==='incomes') reorderVisibleList('incomes', sourceId, targetId, ()=>true);
+}
+function reorderVisibleList(list, sourceId, targetId, predicate){
+  const visible = state[list].filter(predicate).sort((a,b)=>(a.sortOrder??0)-(b.sortOrder??0));
+  const from = visible.findIndex(x=>x.id===sourceId);
+  const to = visible.findIndex(x=>x.id===targetId);
+  if(from<0 || to<0) return;
+  const [item] = visible.splice(from,1);
+  visible.splice(to,0,item);
+  visible.forEach((x,i)=>x.sortOrder=i);
+  save(); render();
+}
+function dragHandle(){ return `<span class="dragHandle" title="Удерживай и перетащи">☰</span>`; }
+
+function renderMonths(){
+  ensureDataModelRelease();
+  const archived=isMonthArchived(currentMonth);
+  const rows=orderedExpensesForMonth(currentMonth);
+  document.getElementById('months').innerHTML = `${monthTabs()}<div class="card ${archived?'archivedCard':''}">
+    <div class="toolbar"><div><h3>${currentMonth} — расходы</h3>${archived?'<p class="mutedText">Месяц архивирован. Редактирование отключено.</p>':'<p class="mutedText">Строки можно менять местами: удерживай значок ☰ и перетаскивай.</p>'}</div><div class="toolbarActions">${bulkDeleteButton('expenses')}<button class="primary" onclick="addExpense()" ${archived?'disabled':''}>Добавить расход</button></div></div>
+    ${expenseForm()}
+    <div class="tableWrap">${expenseTable(rows)}</div></div>`;
+}
+function expenseTable(rows){
+ if(!rows.length) return `<div class="empty">Записей нет</div>`;
+ return `<table class="expenseTable"><thead><tr><th class="checkCol"><input type="checkbox" ${rows.length && rows.every(x=>selected.expenses.has(x.id))?'checked':''} onchange="toggleVisible('expenses', this.checked)"></th><th class="dragCol"></th><th>Категория</th><th>План</th><th>Факт</th><th>Дата</th><th>Оплачено</th><th>Комментарий</th><th>Приоритет</th><th></th></tr></thead><tbody>
+ ${rows.map(x=>{const disabled=archivedAttr(x.month); const listId=`cat_${x.id}`; return `<tr draggable="${disabled?'false':'true'}" ondragstart="startRowDrag(event,'expenses','${x.id}')" ondragend="endRowDrag(event)" ondragover="allowRowDrop(event)" ondragleave="leaveRowDrop(event)" ondrop="dropRow(event,'expenses','${x.id}')">
+ <td class="checkCol"><input type="checkbox" ${selected.expenses.has(x.id)?'checked':''} onchange="toggleOne('expenses','${x.id}',this.checked)" ${disabled}></td>
+ <td class="dragCol">${disabled?'':dragHandle()}</td>
+ <td><div class="searchSelectWrap tableSearch"><input class="searchSelectInput" list="${listId}" value="${escapeHtml(x.category)}" oninput="upd('expenses','${x.id}','category',this.value,{silent:true})" onblur="render()" ${disabled}>${dataList(listId,state.expenseCategories)}<span class="searchSelectIcon">⌕</span></div></td>
+ <td><input ${amountAttrs()} value="${escapeHtml(x.planAmount)}" oninput="amountInput(this,'expenses','${x.id}','planAmount')" onblur="amountBlur(this,'expenses','${x.id}','planAmount');render()" placeholder="0" ${disabled}></td>
+ <td><input ${amountAttrs()} value="${escapeHtml(x.factAmount)}" oninput="amountInput(this,'expenses','${x.id}','factAmount')" onblur="amountBlur(this,'expenses','${x.id}','factAmount');render()" placeholder="0" ${disabled}></td>
+ <td><input type="date" value="${escapeHtml(x.date)}" onchange="upd('expenses','${x.id}','date',this.value)" ${disabled}></td>
+ <td><label class="paidLabel"><input type="checkbox" ${x.paid?'checked':''} onchange="upd('expenses','${x.id}','paid',this.checked)" ${disabled}> ${expenseStatusPill(x)}</label></td>
+ <td><textarea class="commentArea" oninput="upd('expenses','${x.id}','comment',this.value,{silent:true})" onblur="render()" ${disabled}>${escapeHtml(x.comment)}</textarea></td>
+ <td><select onchange="upd('expenses','${x.id}','priority',this.value)" ${disabled}>${options(state.priorities,x.priority)}</select></td>
+ <td><button class="danger subtleDanger" onclick="del('expenses','${x.id}')" ${disabled}>Удалить</button></td></tr>`}).join('')}</tbody></table>`;
+}
+function addExpense(){
+ if(isMonthArchived(currentMonth)){alert('Этот месяц архивирован. Сначала разархивируй его в настройках.'); return;}
+ const maxOrder = Math.max(-1,...state.expenses.filter(x=>x.month===currentMonth).map(x=>Number(x.sortOrder)||0));
+ state.expenses.push(normalizeExpense({id:uid('e'),month:currentMonth,category:val('exCat') || 'Другое',planAmount:cleanAmountValue(val('exPlan'), true),factAmount:cleanAmountValue(val('exFact'), true),date:val('exDate'),paid:document.getElementById('exPaid')?.checked || false,paidManual:document.getElementById('exPaid')?.checked || false,comment:val('exComment'),priority:val('exPriority'),sortOrder:maxOrder+1}));
+ save(); render();
+}
+function renderIncome(){
+ ensureDataModelRelease();
+ document.getElementById('income').innerHTML=`<div class="card"><div class="toolbar"><div><h3>Доходы</h3><p class="mutedText">Будущие доходы не участвуют в остатках до наступления даты. Строки можно менять местами перетаскиванием.</p></div><div class="toolbarActions">${bulkDeleteButton('incomes')}<button class="primary" onclick="addIncome()">Добавить доход</button></div></div>
+ <div class="formrow"><input id="inDate" type="date"><select id="inMonth">${options(state.months,currentMonth)}</select>${searchableField('inType', state.incomeCategories, '', 'placeholder="Категория дохода"')}<input id="inAmount" ${amountAttrs()} oninput="amountInput(this)" onblur="amountBlur(this)" placeholder="Сумма"><input id="inComment" placeholder="Комментарий"></div>
+ <div class="tableWrap">${incomeTable()}</div></div>`;
+}
+function incomeTable(){
+ ensureDataModelRelease();
+ const rows = orderedIncomes();
+ if(!rows.length) return `<div class="empty">Доходов нет</div>`;
+ return `<table class="incomeTable"><thead><tr><th class="checkCol"><input type="checkbox" ${rows.length && rows.every(x=>selected.incomes.has(x.id))?'checked':''} onchange="toggleVisible('incomes', this.checked)"></th><th class="dragCol"></th><th>Дата</th><th>Месяц</th><th>Категория дохода</th><th>Сумма</th><th>Статус</th><th>Комментарий</th><th></th></tr></thead><tbody>
+ ${rows.map(x=>{const disabled=archivedAttr(x.month); const st=incomeStatus(x); const listId=`incomeCat_${x.id}`; return `<tr draggable="${disabled?'false':'true'}" ondragstart="startRowDrag(event,'incomes','${x.id}')" ondragend="endRowDrag(event)" ondragover="allowRowDrop(event)" ondragleave="leaveRowDrop(event)" ondrop="dropRow(event,'incomes','${x.id}')"><td class="checkCol"><input type="checkbox" ${disabled} ${selected.incomes.has(x.id)?'checked':''} onchange="toggleOne('incomes','${x.id}',this.checked)"></td><td class="dragCol">${disabled?'':dragHandle()}</td><td><input type="date" value="${escapeHtml(x.date)}" onchange="upd('incomes','${x.id}','date',this.value);render()" ${disabled}></td><td><select onchange="upd('incomes','${x.id}','month',this.value);render()" ${disabled}>${options(state.months,x.month)}</select></td><td><div class="searchSelectWrap tableSearch"><input class="searchSelectInput" list="${listId}" value="${escapeHtml(x.type || x.source)}" oninput="upd('incomes','${x.id}','type',this.value,{silent:true});upd('incomes','${x.id}','source',this.value,{silent:true})" onblur="render()" ${disabled}>${dataList(listId,state.incomeCategories)}<span class="searchSelectIcon">⌕</span></div></td><td><input ${amountAttrs()} value="${escapeHtml(x.amount)}" oninput="amountInput(this,'incomes','${x.id}','amount')" onblur="amountBlur(this,'incomes','${x.id}','amount');render()" placeholder="0" ${disabled}></td><td><span class="pill ${st.cls}">${st.text}</span></td><td><input value="${escapeHtml(x.comment)}" oninput="upd('incomes','${x.id}','comment',this.value,{silent:true})" onblur="render()" ${disabled}></td><td><button class="danger subtleDanger" onclick="del('incomes','${x.id}')" ${disabled}>Удалить</button></td></tr>`}).join('')}</tbody></table>`;
+}
+function addIncome(){
+  if(isMonthArchived(val('inMonth'))){alert('Этот месяц архивирован. Сначала разархивируй его в настройках.'); return;}
+  const type = val('inType') || 'Другое';
+  const maxOrder = Math.max(-1,...state.incomes.map(x=>Number(x.sortOrder)||0));
+  state.incomes.push({id:uid('i'),date:val('inDate'),month:val('inMonth'),source:type,amount:cleanAmountValue(val('inAmount'), true),type,comment:val('inComment'),sortOrder:maxOrder+1});
+  save(); render();
+}
+
+function startCategoryDrag(ev,kind,value){
+  dragState = {kind:`cat:${kind}`, id:value};
+  ev.dataTransfer.effectAllowed='move';
+  ev.dataTransfer.setData('text/plain', `${kind}:${value}`);
+  ev.currentTarget.classList.add('dragging');
+}
+function dropCategory(ev,kind,targetValue){
+  ev.preventDefault();
+  ev.currentTarget.classList.remove('dragOver');
+  const sourceValue = dragState.id || ev.dataTransfer.getData('text/plain').split(':').slice(1).join(':');
+  if(!sourceValue || sourceValue===targetValue) return;
+  const arrName = kind === 'income' ? 'incomeCategories' : 'expenseCategories';
+  const arr = state[arrName] || [];
+  const from = arr.indexOf(sourceValue);
+  const to = arr.indexOf(targetValue);
+  if(from<0 || to<0) return;
+  const [item] = arr.splice(from,1);
+  arr.splice(to,0,item);
+  state.categories=state.expenseCategories;
+  state.incomeTypes=state.incomeCategories;
+  save(); renderSettings();
+}
+function categoryManager(kind,title,description,inputId,arr){
+  return `<div class="card compactCard categoriesSettings"><h3>${escapeHtml(title)}</h3><p>${escapeHtml(description.replace('Порядок можно менять стрелками.','Порядок можно менять перетаскиванием.'))}</p><div class="compactAdd"><input id="${inputId}" placeholder="Новая категория"><button class="primary" onclick="addCategory('${kind}')">Добавить</button></div><div class="categoryColumn">${(arr||[]).map(c=>`<div class="categoryRow" draggable="true" ondragstart="startCategoryDrag(event,'${kind}','${escapeHtml(c)}')" ondragend="endRowDrag(event)" ondragover="allowRowDrop(event)" ondragleave="leaveRowDrop(event)" ondrop="dropCategory(event,'${kind}','${escapeHtml(c)}')"><span class="dragHandle" title="Удерживай и перетащи">☰</span><span class="categoryName">${escapeHtml(c)}</span><button class="danger miniBtn subtleDanger" onclick="removeCategory('${kind}','${escapeHtml(c)}')">Удалить</button></div>`).join('')}</div></div>`;
+}
+function renderSettings(){
+ ensureDataModelRelease();
+ const tabs=[['account','Аккаунт'],['appearance','Внешний вид'],['data','Импорт / экспорт'],['maintenance','Обслуживание'],['months','Месяцы и архив'],['recurring','Повторяющиеся'],['categories','Модель данных']];
+ const tabButtons = `<div class="settingsTabs">${tabs.map(([id,title])=>`<button class="${settingsTab===id?'active':''}" onclick="settingsTab='${id}';renderSettings()">${title}</button>`).join('')}</div>`;
+ let content='';
+ if(settingsTab === 'account') content = `${cloudPanel()}`;
+ if(settingsTab === 'appearance') content = `<div class="card"><h3>Тема оформления</h3><p class="mutedText">Светлая тема остается как сейчас. Темная тема сделана в спокойной графитово-коричневой палитре.</p><div class="themeChoices"><button class="themeChoice ${currentTheme==='light'?'active':''}" onclick="setTheme('light')"><span class="themePreview lightPreview"></span><strong>Светлая</strong><small>Текущий теплый стиль</small></button><button class="themeChoice ${currentTheme==='dark'?'active':''}" onclick="setTheme('dark')"><span class="themePreview darkPreview"></span><strong>Темная</strong><small>Графит + теплый акцент</small></button></div></div>`;
+ if(settingsTab === 'data') content = `<div class="card"><h3>Импорт / экспорт</h3><p>Экспортируй резервную копию или импортируй данные из JSON. Можно выбрать все месяцы или один месяц.</p><div class="formrow settingsForm"><select id="dataMonthSelect"><option value="ALL">Все месяцы</option>${options(state.months,currentMonth)}</select><button onclick="exportJson()">Экспорт</button><label class="fileBtn">Импорт<input type="file" accept="application/json" onchange="importJson(event)"></label></div></div>`;
+ if(settingsTab === 'maintenance') content = `<div class="card"><h3>Обслуживание</h3><p class="mutedText">Редкие действия убраны в раскрывающиеся блоки, чтобы случайно ничего не удалить.</p><details class="settingsBlock"><summary>Очистить суммы</summary><p>Оставляет строки, но удаляет суммы. Можно выбрать разделы и месяц.</p><select id="clearMonth"><option value="ALL">Все месяцы</option>${options(state.months,currentMonth)}</select>${sectionChecks('clear')}<button onclick="clearAmounts()">Очистить суммы</button></details><details class="settingsBlock"><summary>Пустой шаблон</summary><p>Удаляет записи в выбранных разделах. Архивные месяцы не изменяются.</p><select id="emptyMonth"><option value="ALL">Все месяцы</option>${options(state.months,currentMonth)}</select>${sectionChecks('empty')}<button class="danger" onclick="resetData()">Удалить записи</button></details></div>`;
+ if(settingsTab === 'months') content = `<div class="card"><h3>Месяцы и архив</h3><p>Здесь можно копировать месяцы, архивировать завершенные периоды и разархивировать их при необходимости.</p><details class="settingsBlock"><summary>Создать месяц на основе другого</summary><p>Копирует строки расходов из выбранного месяца в другой. По умолчанию суммы очищаются, чтобы новый месяц был как шаблон.</p><div class="formrow settingsForm"><select id="copyFromMonth">${options(state.months,currentMonth)}</select><select id="copyToMonth">${options(state.months)}</select><label><input type="checkbox" id="copyAmounts"> Копировать суммы тоже</label></div><button onclick="copyMonthTemplate()">Создать / заменить расходы месяца</button></details><details class="settingsBlock"><summary>Архивирование месяцев</summary><p>Можно архивировать один месяц или все месяцы сразу. Для разархивации выбери нужные месяцы из списка архивов.</p><div class="formrow settingsForm"><select id="archiveMonth"><option value="ALL">Все месяцы</option>${options(state.months,currentMonth)}</select><button onclick="archiveSelectedMonth()">Архивировать</button></div><div class="archiveList">${archiveChecks()}</div><button onclick="unarchiveSelectedMonths()">Разархивировать выбранные</button></details></div>`;
+ if(settingsTab === 'recurring') content = `<div class="card"><h3>Повторяющиеся платежи</h3><p class="mutedText">Создай правила для платежей, которые повторяются каждый месяц: патент, квартира, коммуналка, телефон, кредит. Категорию можно выбрать из списка или найти через ввод.</p><div class="formrow">${searchableField('recCat', state.expenseCategories, '', 'placeholder="Категория"')}<input id="recPlan" ${amountAttrs()} oninput="amountInput(this)" onblur="amountBlur(this)" placeholder="Плановая сумма"><input id="recDay" inputmode="numeric" maxlength="2" placeholder="День месяца"><select id="recPriority">${options(state.priorities,'Обязательно')}</select><input id="recComment" placeholder="Комментарий"><button class="primary" onclick="addRecurringExpense()">Добавить правило</button></div>${recurringMonthSelector()}<div class="tableWrap">${recurringTable()}</div></div>`;
+ if(settingsTab === 'categories') content = `<div class="two modelDataGrid">${categoryManager('expense','Категории расходов','Используются в разделе «Расходы» и в повторяющихся платежах. Порядок можно менять перетаскиванием.','newExpenseCat',state.expenseCategories)}${categoryManager('income','Категории доходов','Используются в разделе «Доходы». Порядок можно менять перетаскиванием.','newIncomeCat',state.incomeCategories)}</div>`;
+ document.getElementById('settings').innerHTML=`${tabButtons}<div class="settingsTabContent">${content}</div>`;
+}
+
+try{ render(); }catch(e){ console.error('Release 3.3.1 render failed', e); }
